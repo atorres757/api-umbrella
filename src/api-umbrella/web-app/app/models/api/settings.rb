@@ -2,7 +2,7 @@ class Api::Settings
   include Mongoid::Document
 
   # Fields
-  field :_id, :type => String, :default => lambda { UUIDTools::UUID.random_create.to_s }
+  field :_id, :type => String, :overwrite => true, :default => lambda { SecureRandom.uuid }
   field :append_query_string, :type => String
   field :http_basic_auth, :type => String
   field :require_https, :type => String
@@ -33,7 +33,7 @@ class Api::Settings
 
   # Validations
   validates :require_https,
-    :inclusion => { :in => %w(required_return_error required_return_redirect transition_return_error transition_return_redirect optional), :allow_blank => true }
+    :inclusion => { :in => %w(required_return_error transition_return_error optional), :allow_blank => true }
   validates :api_key_verification_level,
     :inclusion => { :in => %w(none transition_email required_email), :allow_blank => true }
   validates :rate_limit_mode,
@@ -47,34 +47,6 @@ class Api::Settings
 
   # Nested attributes
   accepts_nested_attributes_for :headers, :rate_limits, :default_response_headers, :override_response_headers, :allow_destroy => true
-
-  # Mass assignment security
-  attr_accessible :append_query_string,
-    :http_basic_auth,
-    :require_https,
-    :require_https_transition_start_at,
-    :disable_api_key,
-    :api_key_verification_level,
-    :api_key_verification_transition_start_at,
-    :rate_limit_mode,
-    :anonymous_rate_limit_behavior,
-    :authenticated_rate_limit_behavior,
-    :pass_api_key_header,
-    :pass_api_key_query_param,
-    :required_roles,
-    :required_roles_override,
-    :allowed_ips,
-    :allowed_referers,
-    :error_templates,
-    :error_data_yaml_strings,
-    :headers,
-    :headers_string,
-    :rate_limits_attributes,
-    :default_response_headers,
-    :default_response_headers_string,
-    :override_response_headers,
-    :override_response_headers_string,
-    :as => [:default, :admin]
 
   def headers_string
     read_headers_string(:headers)
@@ -111,7 +83,7 @@ class Api::Settings
       @error_data_yaml_strings = {}
       if self.error_data.present?
         self.error_data.each do |key, value|
-          @error_data_yaml_strings[key] = Psych.dump(value).gsub(/^---\s*\n/, "").strip
+          @error_data_yaml_strings[key] = Psych.dump(value).gsub(/\A---.*?\n/, "").strip
         end
       end
     end
@@ -143,7 +115,7 @@ class Api::Settings
   def set_transition_starts_on_publish
     if(self.require_https =~ /^transition_/)
       if(self.require_https_transition_start_at.blank?)
-        self.require_https_transition_start_at = Time.now
+        self.require_https_transition_start_at = Time.now.utc
       end
     else
       if(self.require_https_transition_start_at.present?)
@@ -153,13 +125,25 @@ class Api::Settings
 
     if(self.api_key_verification_level =~ /^transition_/)
       if(self.api_key_verification_transition_start_at.blank?)
-        self.api_key_verification_transition_start_at = Time.now
+        self.api_key_verification_transition_start_at = Time.now.utc
       end
     else
       if(self.api_key_verification_transition_start_at.present?)
         self.api_key_verification_transition_start_at = nil
       end
     end
+  end
+
+  def serializable_hash(options = nil)
+    hash = super(options)
+    # Ensure all embedded relationships are at least null in the JSON output
+    # (rather than not being present), or else Ember-Data's serialization
+    # throws warnings.
+    hash["default_response_headers"] ||= nil
+    hash["headers"] ||= nil
+    hash["override_response_headers"] ||= nil
+    hash["rate_limits"] ||= nil
+    hash
   end
 
   private

@@ -248,7 +248,7 @@ function _M.remove_arg(original_args, remove)
     -- matter, but in general it just seems safer to default to doing less
     -- changes to the query string).
     local _, gsub_err
-    args, _, gsub_err = gsub(args, "\\b" .. remove .. "=?[^&]*(&|$)", "")
+    args, _, gsub_err = gsub(args, "(?<=^|&)" .. remove .. "(?:=[^&]*)?(?:&|$)", "", "jo")
     if gsub_err then
       ngx.log(ngx.ERR, "regex error: ", gsub_err)
     end
@@ -306,16 +306,6 @@ end
 
 function _M.round(value)
   return math.floor(value + 0.5)
-end
-
-function _M.overhead_timer(start_time)
-  local ngx_ctx = ngx.ctx
-
-  if not ngx_ctx.internal_overhead then
-    ngx_ctx.internal_overhead = 0
-  end
-
-  ngx_ctx.internal_overhead = ngx_ctx.internal_overhead + (ngx.now() - start_time)
 end
 
 return _M

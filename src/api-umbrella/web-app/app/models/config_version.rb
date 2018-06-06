@@ -13,7 +13,7 @@ class ConfigVersion
 
   def self.publish!(config)
     self.create!({
-      :version => Time.now,
+      :version => Time.now.utc,
       :config => config,
     })
   end
@@ -49,7 +49,7 @@ class ConfigVersion
 
   def self.pending_config
     {
-      "apis" => Api.sorted.all.map { |api| Hash[api.attributes] }
+      "apis" => Api.sorted.all.map { |api| Hash[api.attributes] },
     }
   end
 
@@ -70,7 +70,11 @@ class ConfigVersion
                         end
 
       if(current_admin)
-        pending_records = Pundit.policy_scope!(current_admin, pending_records)
+        if(category == "website_backends")
+          pending_records = WebsiteBackendPolicy::Scope.new(current_admin, pending_records).resolve("backend_publish")
+        else
+          pending_records = ApiPolicy::Scope.new(current_admin, pending_records).resolve("backend_publish")
+        end
       end
 
       pending_records = pending_records.sorted.all
@@ -127,7 +131,7 @@ class ConfigVersion
         end
       end
 
-      category_changes.each do |mode, mode_changes|
+      category_changes.each_value do |mode_changes|
         mode_changes.each do |change|
           change["id"] = if(change["pending"]) then change["pending"]["_id"] else change["active"]["_id"] end
           change["name"] = case(category)
@@ -153,7 +157,7 @@ class ConfigVersion
       # data to import, since these are likely to differ even if the data is
       # really the same (since these depend on when the import was actually
       # performed).
-      duplicate.except!(*%w(version created_by created_at updated_at updated_by _id))
+      duplicate.except!("version", "created_by", "created_at", "deleted_at", "updated_at", "updated_by", "_id")
 
       duplicate.each do |key, value|
         duplicate[key] = record_for_comparison(value)
@@ -187,7 +191,7 @@ class ConfigVersion
 
     if(duplicate.kind_of?(Hash))
       duplicate.each do |key, value|
-        if(value.kind_of?(Moped::BSON::ObjectId))
+        if(value.kind_of?(BSON::ObjectId))
           duplicate[key] = value.to_s
         else
           duplicate[key] = stringify_object_ids(value)
@@ -204,7 +208,7 @@ class ConfigVersion
 
   def self.sort_hash_by_keys(object)
     if(object.kind_of?(Hash))
-      object.keys.sort { |x, y| x.to_s <=> y.to_s }.reduce({}) do |sorted, key|
+      object.keys.sort_by(&:to_s).reduce({}) do |sorted, key|
         sorted[key] = sort_hash_by_keys(object[key])
         sorted
       end

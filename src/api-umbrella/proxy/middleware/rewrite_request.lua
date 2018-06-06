@@ -133,12 +133,20 @@ local function set_http_basic_auth(settings)
   end
 end
 
-local function strip_cookies()
+local function strip_cookies(api)
   local cookie_header = ngx.var.http_cookie
   if not cookie_header then return end
 
-  local strips = config["strip_cookies"]
-  if not strips then return end
+  local strips = {}
+  if config["strip_cookies"] then
+    for _, strip_regex in ipairs(config["strip_cookies"]) do
+      table.insert(strips, strip_regex)
+    end
+  end
+  if api["_id"] ~= "api-umbrella-web-app-backend" then
+    table.insert(strips, "^_api_umbrella_session$")
+  end
+  if #strips == 0 then return end
 
   local cookies = split(cookie_header, "; *")
   local kept_cookies = {}
@@ -181,7 +189,7 @@ local function url_rewrites(api)
 
   for _, rewrite in ipairs(api["rewrites"]) do
     if rewrite["http_method"] == "any" or rewrite["http_method"] == request_method then
-      if rewrite["matcher_type"] == "regex" then
+      if rewrite["matcher_type"] == "regex" and rewrite["frontend_matcher"] and rewrite["backend_replacement"] then
         local _, gsub_err
         new_uri, _, gsub_err = gsub(new_uri, rewrite["frontend_matcher"], rewrite["backend_replacement"], "io")
         if gsub_err then
@@ -191,7 +199,7 @@ local function url_rewrites(api)
       -- Route pattern matching implementation based on
       -- https://github.com/bjoerge/route-pattern
       -- TODO: Cleanup!
-      elseif rewrite["matcher_type"] == "route" then
+      elseif rewrite["matcher_type"] == "route" and rewrite["_frontend_path_regex"] then
         local parts = split(new_uri, "?", true, 2)
         local path = parts[1]
         local args = parts[2]
@@ -266,6 +274,6 @@ return function(user, api, settings)
   append_query_string(settings)
   set_headers(settings)
   set_http_basic_auth(settings)
-  strip_cookies()
+  strip_cookies(api)
   url_rewrites(api)
 end

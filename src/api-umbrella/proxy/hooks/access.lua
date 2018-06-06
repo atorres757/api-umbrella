@@ -1,5 +1,3 @@
-local start_time = ngx.now()
-
 -- Try to find the matching API backend first, since it dictates further
 -- settings and requirements.
 local api = ngx.ctx.matched_api
@@ -17,7 +15,6 @@ local referer_validator = require "api-umbrella.proxy.middleware.referer_validat
 local rewrite_request = require "api-umbrella.proxy.middleware.rewrite_request"
 local role_validator = require "api-umbrella.proxy.middleware.role_validator"
 local user_settings = require "api-umbrella.proxy.middleware.user_settings"
-local utils = require "api-umbrella.proxy.utils"
 
 local err
 local err_data
@@ -41,6 +38,9 @@ err = user_settings(settings, user)
 if err then
   return error_handler(err, settings)
 end
+
+-- Store the settings for use by the header_filter.
+ngx.ctx.settings = settings
 
 -- If this API requires access over HTTPS, verify that it's happening.
 err, err_data = https_validator(settings, user)
@@ -80,10 +80,3 @@ err = rewrite_request(user, api, settings)
 if err then
   return error_handler(err, settings)
 end
-
--- Store the settings for use by the header_filter.
-ngx.ctx.settings = settings
-
--- Compute how much time we spent in Lua processing during this phase of the
--- request.
-utils.overhead_timer(start_time)

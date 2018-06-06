@@ -1,12 +1,15 @@
 class Api::HealthChecksController < ApplicationController
+  # API requests won't pass CSRF tokens, so don't reject requests without them.
+  protect_from_forgery :with => :null_session
+
   def ip
     render(:json => { :ip => request.ip })
   end
 
   def logging
     @search = LogSearch.new({
-      :start_time => Time.now - params[:age].to_i,
-      :end_time => Time.now,
+      :start_time => Time.now.utc - params[:age].to_i,
+      :end_time => Time.now.utc,
     })
 
     @search.filter_by_date_range!

@@ -7,6 +7,7 @@
 **Debian 8 (Jessie)**
 
 ```sh
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
 $ echo "deb https://dl.bintray.com/nrel/api-umbrella-debian jessie main" | sudo tee /etc/apt/sources.list.d/api-umbrella.list
 $ sudo apt-get update
 $ sudo apt-get install api-umbrella
@@ -15,6 +16,7 @@ $ sudo apt-get install api-umbrella
 **Debian 7 (Wheezy)**
 
 ```sh
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
 $ echo "deb https://dl.bintray.com/nrel/api-umbrella-debian wheezy main" | sudo tee /etc/apt/sources.list.d/api-umbrella.list
 $ sudo apt-get update
 $ sudo apt-get install api-umbrella
@@ -34,9 +36,19 @@ $ curl https://bintray.com/nrel/api-umbrella-el6/rpm | sudo tee /etc/yum.repos.d
 $ sudo yum install api-umbrella
 ```
 
+**Ubuntu 16.04 (Xenial)**
+
+```sh
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
+$ echo "deb https://dl.bintray.com/nrel/api-umbrella-ubuntu xenial main" | sudo tee /etc/apt/sources.list.d/api-umbrella.list
+$ sudo apt-get update
+$ sudo apt-get install api-umbrella
+```
+
 **Ubuntu 14.04 (Trusty)**
 
 ```sh
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
 $ echo "deb https://dl.bintray.com/nrel/api-umbrella-ubuntu trusty main" | sudo tee /etc/apt/sources.list.d/api-umbrella.list
 $ sudo apt-get update
 $ sudo apt-get install api-umbrella
@@ -45,6 +57,7 @@ $ sudo apt-get install api-umbrella
 **Ubuntu 12.04 (Precise)**
 
 ```sh
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
 $ echo "deb https://dl.bintray.com/nrel/api-umbrella-ubuntu precise main" | sudo tee /etc/apt/sources.list.d/api-umbrella.list
 $ sudo apt-get update
 $ sudo apt-get install api-umbrella
@@ -56,11 +69,11 @@ If you use [Chef](https://www.chef.io) for managing your servers, we provide a [
 
 ### Running With Docker
 
-In this simple example, the API Umbrella configuration can be stored in the `config/api-umbrella.yml` file on host machine. This gets mounted as `/etc/api-umbrella/api-umbrella.yml` inside the container, which is the path for the configuration file the rest of the documentation will reference.
+In this simple example, custom API Umbrella configuration can be defined in the `config/api-umbrella.yml` file on host machine. This gets mounted as `/etc/api-umbrella/api-umbrella.yml` inside the container, which is the path for the configuration file the rest of the documentation will reference.
 
 ```sh
 $ mkdir config && touch config/api-umbrella.yml
-$ docker run -d --name=api-umbrella -p 80:80 -p 443:443 -v $PWD/config:/etc/api-umbrella nrel/api-umbrella
+$ docker run -d --name=api-umbrella -p 80:80 -p 443:443 -v "$(pwd)/config":/etc/api-umbrella nrel/api-umbrella
 ```
 
 ### Installing From Source Code
@@ -68,21 +81,6 @@ $ docker run -d --name=api-umbrella -p 80:80 -p 443:443 -v $PWD/config:/etc/api-
 Installing from a binary package is recommended, if available ([let us know](https://github.com/NREL/api-umbrella/issues/new) if you'd like to see binary packages for other platforms). However, if a binary package is not available you can [compile from source](developer/compiling-from-source.html).
 
 ## Setup
-
-- Open the configuration file for editing:
-
-  ```sh
-  $ sudo -e /etc/api-umbrella/api-umbrella.yml
-  ```
-
-- In the config file, define an e-mail address for your first admin account:
-
-  ```yaml
-  web:
-    admin:
-      initial_superusers:
-        - your.email@example.com
-  ```
 
 - Start API Umbrella:
 
@@ -104,7 +102,7 @@ A web admin is available to perform basic tasks:
 
 `https://your-api-umbrella-host/admin/`
 
-During the initial [setup](#setup), you should have defined the `web.admin.initial_superusers` setting in the `/etc/api-umbrella/api-umbrella.yml` config file. You should now be able to login to to the admin using an account tied to the e-mail address you defined ([Mozilla Persona](https://login.persona.org/about) is the only option that will work without additional configuration, but it's has a quick signup if you don't already have an account).
+The very first time you access the admin, you'll be given a chance to create your first admin account.
 
 ### Add API Backends
 

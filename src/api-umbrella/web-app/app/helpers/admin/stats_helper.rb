@@ -31,7 +31,7 @@ module Admin::StatsHelper
       bucket["percent"] = ((bucket["count"] / total) * 100).round
     end
 
-    if(other_hits > 0)
+    if(other_hits && other_hits > 0)
       buckets << {
         "key" => "Other",
         "count" => other_hits,
@@ -79,12 +79,12 @@ module Admin::StatsHelper
     name = code
     case(params[:region])
     when "world"
-      country = Country[code]
+      country = ISO3166::Country.new(code)
       if country
         name = country.name
       end
     when /^[A-Z]{2}$/
-      country = Country[params[:region]]
+      country = ISO3166::Country.new(params[:region])
       if country
         state = country.states[code]
         if(state)

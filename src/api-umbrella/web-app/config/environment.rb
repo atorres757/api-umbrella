@@ -1,5 +1,5 @@
-# Load the rails application
-require File.expand_path('../application', __FILE__)
+# Load the Rails application.
+require File.expand_path('application', __dir__)
 
-# Initialize the rails application
-ApiUmbrella::Application.initialize!
+# Initialize the Rails application.
+Rails.application.initialize!

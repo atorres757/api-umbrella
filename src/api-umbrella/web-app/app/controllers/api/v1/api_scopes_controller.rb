@@ -1,8 +1,8 @@
 class Api::V1::ApiScopesController < Api::V1::BaseController
   respond_to :json
 
-  skip_after_filter :verify_authorized, :only => [:index]
-  after_filter :verify_policy_scoped, :only => [:index]
+  skip_after_action :verify_authorized, :only => [:index]
+  after_action :verify_policy_scoped, :only => [:index]
 
   def index
     @api_scopes = policy_scope(ApiScope).order_by(datatables_sort_array)
@@ -24,6 +24,7 @@ class Api::V1::ApiScopesController < Api::V1::BaseController
         { :name => /#{Regexp.escape(params[:search][:value])}/i },
         { :host => /#{Regexp.escape(params[:search][:value])}/i },
         { :path_prefix => /#{Regexp.escape(params[:search][:value])}/i },
+        { :_id => params[:search][:value].downcase },
       ])
     end
   end
@@ -56,8 +57,19 @@ class Api::V1::ApiScopesController < Api::V1::BaseController
 
   def save!
     authorize(@api_scope) unless(@api_scope.new_record?)
-    @api_scope.assign_attributes(params[:api_scope], :as => :admin)
+    @api_scope.assign_attributes(api_scope_params)
     authorize(@api_scope)
     @api_scope.save
+  end
+
+  def api_scope_params
+    params.require(:api_scope).permit([
+      :name,
+      :host,
+      :path_prefix,
+    ])
+  rescue => e
+    logger.error("Parameters error: #{e}")
+    ActionController::Parameters.new({}).permit!
   end
 end

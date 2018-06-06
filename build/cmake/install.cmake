@@ -44,17 +44,21 @@ install(
 
 install(
   CODE "
-  message(STATUS \"Directories: \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/core/${RELEASE_TIMESTAMP}\")
+  message(STATUS \"Directories: \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/core/releases/${RELEASE_TIMESTAMP}\")
   execute_process(
     WORKING_DIRECTORY \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/core
-    COMMAND mv releases/0 releases/${RELEASE_TIMESTAMP}
-    COMMAND ln -snf releases/${RELEASE_TIMESTAMP} ./current
+    # Multiple commands in execute_process are executed in parallel
+    # (http://public.kitware.com/pipermail/cmake/2016-March/063076.html). Since
+    # the order of these matter, use a shell wrapper.
+    COMMAND sh -c \"rm -rf releases/${RELEASE_TIMESTAMP} && mv releases/0 releases/${RELEASE_TIMESTAMP} && ln -snf releases/${RELEASE_TIMESTAMP} ./current\"
   )
-  message(STATUS \"Directories: \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/static-site/${RELEASE_TIMESTAMP}\")
+  message(STATUS \"Directories: \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/static-site/releases/${RELEASE_TIMESTAMP}\")
   execute_process(
     WORKING_DIRECTORY \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/static-site
-    COMMAND mv releases/0 releases/${RELEASE_TIMESTAMP}
-    COMMAND ln -snf releases/${RELEASE_TIMESTAMP} ./current
+    # Multiple commands in execute_process are executed in parallel
+    # (http://public.kitware.com/pipermail/cmake/2016-March/063076.html). Since
+    # the order of these matter, use a shell wrapper.
+    COMMAND sh -c \"rm -rf releases/${RELEASE_TIMESTAMP} && mv releases/0 releases/${RELEASE_TIMESTAMP} && ln -snf releases/${RELEASE_TIMESTAMP} ./current\"
   )
   message(STATUS \"Directories: \$ENV{DESTDIR}/usr/bin \$ENV{DESTDIR}/var/log \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/etc \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/var/db \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/var/log \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/var/run \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/var/tmp\")
   execute_process(
@@ -78,36 +82,14 @@ install(
   execute_process(
     COMMAND chmod 1777 \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/var/tmp
   )
-  message(STATUS \"Permissions: \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/core/shared/src/api-umbrella/web-app/tmp\")
-  execute_process(
-    COMMAND chmod 775 \$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/embedded/apps/core/shared/src/api-umbrella/web-app/tmp
-  )
   "
   COMPONENT core
 )
 
-if(ENABLE_HADOOP_ANALYTICS)
-  install(
-    DIRECTORY ${HADOOP_ANALYTICS_STAGE_PREFIX_DIR}/
-    DESTINATION ${CMAKE_INSTALL_PREFIX}
-    USE_SOURCE_PERMISSIONS
-    COMPONENT hadoop-analytics
-  )
-endif()
-
-add_custom_target(
-  install-core
+add_custom_target(install-core
   COMMAND ${CMAKE_COMMAND} -D CMAKE_INSTALL_COMPONENT=core -P ${CMAKE_BINARY_DIR}/cmake_install.cmake
 )
 
-if(ENABLE_HADOOP_ANALYTICS)
-  add_custom_target(
-    install-hadoop-analytics
-    COMMAND ${CMAKE_COMMAND} -D CMAKE_INSTALL_COMPONENT=hadoop-analytics -P ${CMAKE_BINARY_DIR}/cmake_install.cmake
-  )
-endif()
-
-add_custom_target(
-  after-install
+add_custom_target(after-install
   COMMAND ${CMAKE_SOURCE_DIR}/build/package/scripts/after-install 1
 )

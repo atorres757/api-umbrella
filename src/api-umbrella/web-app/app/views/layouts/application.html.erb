@@ -2,22 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>API Umbrella</title>
-    <%= stylesheet_link_tag "application" %>
-    <%= javascript_include_tag "application" %>
-    <%= csrf_meta_tag %>
+    <title>API Umbrella Admin</title>
+    <meta content="width=device-width,initial-scale=1" name="viewport">
+    <%= stylesheet_link_tag "admin/login" %>
+    <%= csrf_meta_tags %>
   </head>
   <body>
-    <div class="container-fluid">
-      <div id="main" class="row-fluid">
-        <% flash.each do |flash_type, message| %>
-          <div class="alert alert-<%= flash_type %>">
-            <%= message %>
-          </div>
-        <% end %>
+    <div class="login">
+      <% flash.each do |flash_type, message| %>
+        <% next unless(message.kind_of?(String)) %>
+        <div class="alert <%= bootstrap_class_for(flash_type) %>">
+          <%= if(flash[:html_safe]) then message.html_safe else message end %>
+        </div>
+      <% end %>
 
-        <%= yield %>
-      </div>
+      <%= yield %>
     </div>
   </body>
 </html>

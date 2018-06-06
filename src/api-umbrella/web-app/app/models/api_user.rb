@@ -10,7 +10,7 @@ class ApiUser
   include ApiUmbrella::AttributifyData
 
   # Fields
-  field :_id, :type => String, :default => lambda { UUIDTools::UUID.random_create.to_s }
+  field :_id, :type => String, :overwrite => true, :default => lambda { SecureRandom.uuid }
   field :api_key
   field :first_name
   field :last_name
@@ -49,21 +49,27 @@ class ApiUser
   validates :api_key,
     :uniqueness => true
   validates :first_name,
-    :presence => { :message => "Provide your first name." }
+    :presence => { :message => "Provide your first name." },
+    :format => { :without => proc { ::Regexp.new(ApiUmbrellaConfig[:web][:api_user][:first_name_exclude_regex], ::Regexp::IGNORECASE) } },
+    :length => { :maximum => 80 }
   validates :last_name,
-    :presence => { :message => "Provide your last name." }
+    :presence => { :message => "Provide your last name." },
+    :format => { :without => proc { ::Regexp.new(ApiUmbrellaConfig[:web][:api_user][:last_name_exclude_regex], ::Regexp::IGNORECASE) } },
+    :length => { :maximum => 80 }
   validates :email,
     :presence => { :message => "Provide your email address." },
     :format => {
       :with => /.+@.+\..+/,
       :allow_blank => true,
       :message => "Provide a valid email address.",
-    }
+    },
+    :length => { :maximum => 255 }
   validates :website,
     :format => {
       :with => /\w+\.\w+/,
       :message => "Your website must be a valid URL in the form of http://example.com",
     },
+    :length => { :maximum => 255 },
     :allow_blank => true
   validates :terms_and_conditions,
     :acceptance => {
@@ -84,21 +90,6 @@ class ApiUser
 
   # Nested attributes
   accepts_nested_attributes_for :settings
-
-  # Mass assignment security
-  attr_accessible :first_name,
-    :last_name,
-    :email,
-    :website,
-    :use_description,
-    :terms_and_conditions,
-    :registration_source,
-    :as => [:default, :admin]
-  attr_accessible :roles,
-    :throttle_by_ip,
-    :enabled,
-    :settings_attributes,
-    :as => :admin
 
   def self.human_attribute_name(attribute, options = {})
     case(attribute.to_sym)
@@ -130,7 +121,7 @@ class ApiUser
   def enabled=(enabled)
     if(enabled.to_s == "false")
       if(self.disabled_at.nil?)
-        self.disabled_at = Time.now
+        self.disabled_at = Time.now.utc
       end
     else
       self.disabled_at = nil
@@ -143,6 +134,15 @@ class ApiUser
 
   def api_key_hides_at
     @api_key_hides_at ||= self.created_at + 2.weeks
+  end
+
+  def serializable_hash(options = nil)
+    hash = super(options)
+    # Ensure all embedded relationships are at least null in the JSON output
+    # (rather than not being present), or else Ember-Data's serialization
+    # throws warnings.
+    hash["settings"] ||= nil
+    hash
   end
 
   private
@@ -198,7 +198,7 @@ class ApiUser
   # that all of the records get touched with consistent server-side
   # timestamps).
   def touch_server_side_timestamp
-    collection.find({ :_id => self.id }).update({
+    collection.update_one({ :_id => self.id }, {
       "$currentDate" => {
         "ts" => { "$type" => "timestamp" },
       },

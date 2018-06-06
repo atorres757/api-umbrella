@@ -9,7 +9,7 @@ class LogSearch::ElasticSearch < LogSearch::Base
 
     @client = ::Elasticsearch::Client.new({
       :hosts => ApiUmbrellaConfig[:elasticsearch][:hosts],
-      :logger => Rails.logger
+      :logger => Rails.logger,
     })
 
     @query = {
@@ -37,9 +37,30 @@ class LogSearch::ElasticSearch < LogSearch::Base
       :ignore_unavailable => "missing",
       :allow_no_indices => true,
     }
+
+    if(@options[:query_timeout])
+      @query_options[:timeout] = "#{@options[:query_timeout]}s"
+    end
   end
 
   def result
+    if @none
+      raw_result = {
+        "hits" => {
+          "total" => 0,
+          "hits" => [],
+        },
+        "aggregations" => {},
+      }
+      @query[:aggregations].each_key do |aggregation_name|
+        raw_result["aggregations"][aggregation_name.to_s] ||= {}
+        raw_result["aggregations"][aggregation_name.to_s]["buckets"] = []
+        raw_result["aggregations"][aggregation_name.to_s]["doc_count"] = 0
+      end
+      @result = LogResult.factory(self, raw_result)
+      return @result
+    end
+
     query_options = @query_options.merge({
       :index => indexes.join(","),
       :body => @query,
@@ -52,13 +73,17 @@ class LogSearch::ElasticSearch < LogSearch::Base
       query_options[:body].delete(:aggregations)
     end
     raw_result = @client.search(query_options)
+    if(raw_result["timed_out"])
+      # Don't return partial results.
+      raise "Elasticsearch request timed out"
+    end
     @result = LogResult.factory(self, raw_result)
   end
 
   def permission_scope!(scopes)
     filter = {
       :bool => {
-        :should => []
+        :should => [],
       },
     }
 
@@ -77,7 +102,7 @@ class LogSearch::ElasticSearch < LogSearch::Base
     if(query_string.present?)
       @query[:query][:filtered][:query] = {
         :query_string => {
-          :query => query_string
+          :query => query_string,
         },
       }
     end
@@ -103,7 +128,11 @@ class LogSearch::ElasticSearch < LogSearch::Base
         filter = {}
 
         if(!CASE_SENSITIVE_FIELDS.include?(rule["field"]) && rule["value"].kind_of?(String))
-          rule["value"].downcase!
+          if(UPPERCASE_FIELDS.include?(rule["field"]))
+            rule["value"].upcase!
+          else
+            rule["value"].downcase!
+          end
         end
 
         case(rule["operator"])
@@ -188,7 +217,7 @@ class LogSearch::ElasticSearch < LogSearch::Base
         condition = if(query["condition"] == "OR") then :should else :must end
         query_filter = {
           :bool => {
-            condition => filters
+            condition => filters,
           },
         }
       end
@@ -273,7 +302,7 @@ class LogSearch::ElasticSearch < LogSearch::Base
   end
 
   def aggregate_by_drilldown_over_time!(prefix)
-    @query[:query][:filtered][:filter][:bool][:must] <<                 {
+    @query[:query][:filtered][:filter][:bool][:must] << {
       :prefix => {
         :request_hierarchy => prefix,
       },

@@ -61,6 +61,15 @@ Vagrant.configure("2") do |config|
     config.nfs.map_gid = Process.gid
   end
 
+  config.vm.synced_folder "src/api-umbrella/admin-ui", "/vagrant-admin-ui",
+    :type => "rsync",
+    :rsync__verbose => true,
+    :rsync__exclude => [
+      "tmp",
+      "node_modules",
+      "dist",
+    ]
+
   # Provider-specific configuration so you can fine-tune various
   # backing providers for Vagrant. These expose provider-specific options.
   config.vm.provider :virtualbox do |vb|

@@ -2,17 +2,16 @@ local cidr = require "libcidr-ffi"
 local cjson = require "cjson"
 local escape_regex = require "api-umbrella.utils.escape_regex"
 local host_normalize = require "api-umbrella.utils.host_normalize"
-local load_backends = require "api-umbrella.proxy.load_backends"
 local mustache_unescape = require "api-umbrella.utils.mustache_unescape"
 local plutils = require "pl.utils"
-local resolve_backend_dns = require "api-umbrella.proxy.jobs.resolve_backend_dns"
+local random_token = require "api-umbrella.utils.random_token"
 local tablex = require "pl.tablex"
 local utils = require "api-umbrella.proxy.utils"
+local startswith = require("pl.stringx").startswith
 
 local append_array = utils.append_array
 local cache_computed_settings = utils.cache_computed_settings
 local deepcopy = tablex.deepcopy
-local escape = plutils.escape
 local set_packed = utils.set_packed
 local size = tablex.size
 local split = plutils.split
@@ -54,8 +53,18 @@ local function cache_computed_api(api)
 
   if api["url_matches"] then
     for _, url_match in ipairs(api["url_matches"]) do
-      url_match["_frontend_prefix_matcher"] = "^" .. escape(url_match["frontend_prefix"])
-      url_match["_backend_prefix_matcher"] = "^" .. escape(url_match["backend_prefix"])
+      url_match["_frontend_prefix_regex"] = "^" .. escape_regex(url_match["frontend_prefix"])
+      url_match["_backend_prefix_regex"] = "^" .. escape_regex(url_match["backend_prefix"])
+
+      url_match["_frontend_prefix_contains_backend_prefix"] = false
+      if startswith(url_match["frontend_prefix"], url_match["backend_prefix"]) then
+        url_match["_frontend_prefix_contains_backend_prefix"] = true
+      end
+
+      url_match["_backend_prefix_contains_frontend_prefix"] = false
+      if startswith(url_match["backend_prefix"], url_match["frontend_prefix"]) then
+        url_match["_backend_prefix_contains_frontend_prefix"] = true
+      end
     end
   end
 
@@ -78,7 +87,7 @@ local function cache_computed_api(api)
       -- Route pattern matching implementation based on
       -- https://github.com/bjoerge/route-pattern
       -- TODO: Cleanup!
-      if rewrite["matcher_type"] == "route" then
+      if rewrite["matcher_type"] == "route" and rewrite["frontend_matcher"] and rewrite["backend_replacement"] then
         local backend_replacement = mustache_unescape(rewrite["backend_replacement"])
         local backend_parts = split(backend_replacement, "?", true, 2)
         rewrite["_backend_replacement_path"] = backend_parts[1]
@@ -162,26 +171,40 @@ local function sort_by_frontend_host_length(a, b)
   return string.len(tostring(a["frontend_host"])) > string.len(tostring(b["frontend_host"]))
 end
 
+local function parse_api(api)
+  if not api["_id"] then
+    api["_id"] = ngx.md5(cjson.encode(api))
+  end
+
+  cache_computed_api(api)
+  cache_computed_settings(api["settings"])
+  cache_computed_sub_settings(api["sub_settings"])
+end
+
 local function parse_apis(apis)
   for _, api in ipairs(apis) do
-    if not api["_id"] then
-      api["_id"] = ngx.md5(cjson.encode(api))
+    local ok, err = pcall(parse_api, api)
+    if not ok then
+      ngx.log(ngx.ERR, "failed parsing API config: ", err)
     end
+  end
+end
 
-    cache_computed_api(api)
-    cache_computed_settings(api["settings"])
-    cache_computed_sub_settings(api["sub_settings"])
+local function parse_website_backend(website_backend)
+  if not website_backend["_id"] then
+    website_backend["_id"] = random_token(32)
+  end
+
+  if website_backend["frontend_host"] then
+    set_hostname_regex(website_backend, "frontend_host")
   end
 end
 
 local function parse_website_backends(website_backends)
   for _, website_backend in ipairs(website_backends) do
-    if not website_backend["_id"] then
-      website_backend["_id"] = ndk.set_var.set_secure_random_alphanum(32)
-    end
-
-    if website_backend["frontend_host"] then
-      set_hostname_regex(website_backend, "frontend_host")
+    local ok, err = pcall(parse_website_backend, website_backend)
+    if not ok then
+      ngx.log(ngx.ERR, "failed parsing website backend config: ", err)
     end
   end
 
@@ -230,9 +253,6 @@ function _M.set(db_config)
   local website_backends = get_combined_website_backends(file_config, db_config)
 
   local active_config = build_active_config(apis, website_backends)
-  resolve_backend_dns.resolve(active_config["apis"])
-  load_backends.setup_backends(active_config["apis"])
-
   set_packed(ngx.shared.active_config, "packed_data", active_config)
   ngx.shared.active_config:set("db_version", db_config["version"])
   ngx.shared.active_config:set("file_version", file_config["version"])

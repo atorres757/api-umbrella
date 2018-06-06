@@ -24,11 +24,9 @@ module DatatablesHelper
     if params[key].is_a?(Array)
       as_array = params[key]
     elsif params[key].is_a?(Hash)
-      upper_bound = params[key].length - 1
-      (0..upper_bound).each do |idx|
-        if params[key].key?(idx.to_s)
-          as_array << params[key][idx.to_s]
-        end
+      indexes = params[key].keys.sort_by { |k| k.to_i }
+      indexes.each do |index|
+        as_array << params[key][index]
       end
     elsif params.key?(key)
       as_array = [params[key]]
@@ -41,8 +39,9 @@ module DatatablesHelper
     columns = self.param_index_array(:columns)
     columns = columns.select { |col| col[:data] }
     columns.map do |col|
-      { :name => (col[:name] || '-').to_s,
-        :field => col[:data].to_s
+      {
+        :name => (col[:name] || '-').to_s,
+        :field => col[:data].to_s,
       }
     end
   end

@@ -1,12 +1,16 @@
 require "csv_streamer"
 
 class Admin::StatsController < Admin::BaseController
-  set_tab :analytics
+  # API requests won't pass CSRF tokens, so don't reject requests without them.
+  skip_before_action :verify_authenticity_token
 
-  before_filter :set_analytics_adapter
-  around_filter :set_time_zone
-  skip_after_filter :verify_authorized
-  after_filter :verify_policy_scoped
+  # Try authenticating from an admin token (for direct API access).
+  before_action :authenticate_admin_from_token!
+
+  before_action :set_analytics_adapter
+  around_action :set_time_zone
+  skip_after_action :verify_authorized
+  after_action :verify_policy_scoped
 
   def index
   end
@@ -33,16 +37,8 @@ class Admin::StatsController < Admin::BaseController
   end
 
   def logs
-    # TODO: For the SQL fetching, set start_time to end_time to limit to last
-    # 24 hours. If we do end up limiting it to the last 24 hours by default,
-    # figure out a better way to document this and still allow downloading
-    # the full data set.
-    start_time = params[:start_at]
-    if(@analytics_adapter == "kylin")
-      start_time = Time.zone.parse(params[:end_at]) - 1.day
-    end
     @search = LogSearch.factory(@analytics_adapter, {
-      :start_time => start_time,
+      :start_time => params[:start_at],
       :end_time => params[:end_at],
       :interval => params[:interval],
     })
@@ -78,17 +74,17 @@ class Admin::StatsController < Admin::BaseController
       format.csv do
         # Set Last-Modified so response streaming works:
         # http://stackoverflow.com/a/10252798/222487
-        response.headers["Last-Modified"] = Time.now.httpdate
+        response.headers["Last-Modified"] = Time.now.utc.httpdate
 
         headers = ["Time", "Method", "Host", "URL", "User", "IP Address", "Country", "State", "City", "Status", "Reason Denied", "Response Time", "Content Type", "Accept Encoding", "User Agent"]
 
-        send_file_headers!(:disposition => "attachment", :filename => "api_logs (#{Time.now.strftime("%b %-e %Y")}).#{params[:format]}")
+        send_file_headers!(:disposition => "attachment", :filename => "api_logs (#{Time.now.utc.strftime("%b %-e %Y")}).#{params[:format]}")
         self.response_body = CsvStreamer.new(@result, headers) do |row|
           [
             csv_time(row["request_at"]),
             row["request_method"],
             row["request_host"],
-            strip_api_key_from_url(row["request_url"]),
+            sanitized_full_url(row),
             row["user_email"],
             row["request_ip"],
             row["request_ip_country"],
@@ -181,7 +177,7 @@ class Admin::StatsController < Admin::BaseController
         :registration_source => user["registration_source"],
         :created_at => user["created_at"],
         :hits => bucket["doc_count"],
-        :last_request_at => Time.at(bucket["last_request_at"]["value"] / 1000),
+        :last_request_at => Time.at(bucket["last_request_at"]["value"] / 1000).utc,
         :use_description => user["use_description"],
       }
     end
@@ -226,10 +222,27 @@ class Admin::StatsController < Admin::BaseController
 
   private
 
-  def strip_api_key_from_url(url)
-    stripped = url.gsub(/\bapi_key=?[^&]*(&|$)/, "")
-    stripped.gsub!(/&$/, "")
+  def sanitized_full_url(record)
+    url = "#{record["request_scheme"]}://#{record["request_host"]}#{record["request_path"]}"
+    url += "?#{strip_api_key_from_query(record["request_url_query"])}" if(record["request_url_query"])
+    url
+  end
+
+  def sanitized_url_path_and_query(record)
+    url = record["request_path"].to_s.dup
+    url += "?#{strip_api_key_from_query(record["request_url_query"])}" if(record["request_url_query"])
+    url
+  end
+  helper_method :sanitized_url_path_and_query
+
+  def strip_api_key_from_query(query)
+    stripped = query
+    if(query)
+      stripped = query.gsub(/\bapi_key=?[^&]*(&|$)/i, "")
+      stripped.gsub!(/&$/, "")
+    end
+
     stripped
   end
-  helper_method :strip_api_key_from_url
+  helper_method :strip_api_key_from_query
 end

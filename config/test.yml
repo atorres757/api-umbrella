@@ -1,0 +1,112 @@
+app_env: test
+user:
+group:
+http_port: 9080
+https_port: 9081
+analytics:
+  timezone: America/Denver
+static_site:
+  port: 13013
+nginx:
+  # We default the number of workers to the number of CPU cores, but keep this
+  # hard-coded for test purposes so we have a more stable baseline and ensure
+  # our tests always run with multiple workers.
+  workers: 2
+  access_log_options:
+  proxy_connect_timeout: 10
+  proxy_read_timeout: 10
+  proxy_send_timeout: 10
+trafficserver:
+  port: 13009
+  management_port: 13008
+  embedded_server_config:
+    records:
+      # In the test environment disable fuzzy revalidation since it makes
+      # things difficult to test against. For production, it seems like a
+      # decent idea to keep the feature enabled, but in the test environment,
+      # it means that 0.5% of requests might not behave as expected (since they
+      # will be re-fetched ahead of their actual TTL).
+      # See: https://docs.trafficserver.apache.org/en/latest/admin/http-proxy-caching.en.html?highlight=fuzz#fuzzy-revalidation
+      - CONFIG proxy.config.http.cache.fuzz.time INT 0
+api_server:
+  port: 13010
+web:
+  port: 13012
+  rails_secret_token: aeec385fb48a0594b6bb0b18f62473190f1d01b0b6113766af525be2ae1a317a03ab0ee1b3ee6aca3fb1572dc87684e033dcec21acd90d0ca0f111ca1785d0e9
+  admin:
+    auth_strategies:
+      facebook:
+        client_id: test_fake
+        client_secret: test_fake
+      github:
+        client_id: test_fake
+        client_secret: test_fake
+      gitlab:
+        client_id: test_fake
+        client_secret: test_fake
+      google:
+        client_id: test_fake
+        client_secret: test_fake
+      ldap:
+        options:
+          host: 127.0.0.1
+          port: 389
+          method: plain
+          base: dc=example,dc=com
+          uid: sAMAccountName
+  mailer:
+    smtp_settings:
+      address: 127.0.0.1
+      port: 13102
+  contact_form_email: default-test-contact-email@example.com
+router:
+  trusted_proxies:
+    - 192.168.12.0/23
+    - 10.10.10.10
+rsyslog:
+  port: 13014
+mongodb:
+  url: "mongodb://127.0.0.1:13001/api_umbrella_test"
+  embedded_server_config:
+    net:
+      port: 13001
+    storage:
+      journal:
+        enabled: false
+mora:
+  port: 13004
+elasticsearch:
+  hosts:
+    - "http://127.0.0.1:13002"
+  embedded_server_config:
+    http:
+      port: 13002
+    transport:
+      tcp:
+        port: 13003
+    discovery:
+      zen:
+        ping:
+          multicast:
+            enabled: false
+    index:
+      number_of_shards: 1
+      number_of_replicas: 0
+unbound:
+  port: 13100
+  control_port: 13101
+mailhog:
+  bind_addr: "127.0.0.1"
+  smtp_port: 13102
+  api_port: 13103
+  ui_port: 13103
+openldap:
+  port: 13104
+apiSettings:
+  require_https: optional
+_test_config:
+  default_null_override_hash:
+    foo: bar
+  default_null_override_string: foobar
+  default_empty_hash_override_hash:
+    baz: qux

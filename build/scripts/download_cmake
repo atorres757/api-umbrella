@@ -2,12 +2,13 @@
 
 set -e -u
 
-version=3.6.2
-checksum=5df4b69d9e85093ae78b1070d5cb9f824ce0bdd02528948c3f6a740e240083e5
+version=3.11.1
+checksum=3aa8d3b53903563bdc13dfec80716c286b2228db36ef65c23bc616f9bb930367
 
-source_dir="$(dirname "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")")"
-version_stamp="$source_dir/build/work/cmake/version-$version"
-prefix="$source_dir/build/work/cmake"
+build_dir=$(pwd)
+work_dir="$build_dir/build/work"
+version_stamp="$work_dir/cmake/version-$version"
+prefix="$work_dir/cmake"
 
 if [[ ! -e "$prefix/bin/cmake" || ! -e "$version_stamp" ]]; then
   rm -rf "$prefix"
@@ -16,10 +17,10 @@ if [[ ! -e "$prefix/bin/cmake" || ! -e "$version_stamp" ]]; then
   download_filename="cmake-$version-Linux-x86_64.tar.gz"
   minor_version=${version%.*}
   download_url="https://cmake.org/files/v$minor_version/$download_filename"
-  download_path="$source_dir/build/work/$download_filename"
+  download_path="$work_dir/$download_filename"
   if [ ! -e "$download_path" ]; then
     echo "Downloading CMake $version..."
-    curl -fL -o "$download_path" "$download_url"
+    curl -fL --retry 3 -o "$download_path" "$download_url"
   fi
 
   actual_checksum=$(openssl sha256 "$download_path" | awk '{print $2}')

@@ -1,13 +1,11 @@
-require "mail_sanitizer"
-
 class ContactMailer < ActionMailer::Base
   default :from => "noreply@#{ApiUmbrellaConfig[:web][:default_host]}"
 
-  def contact_email(contact)
-    @contact = contact
+  def contact_email(contact_params)
+    @contact = Contact.new(contact_params)
 
-    mail :reply_to => MailSanitizer.sanitize_address(contact.email),
-      :subject => "#{ApiUmbrellaConfig[:site_name]} Contact Message from #{contact.email}",
-      :to => MailSanitizer.sanitize_address(ApiUmbrellaConfig[:web][:contact_form_email])
+    mail :reply_to => @contact.email,
+      :subject => "#{ApiUmbrellaConfig[:site_name]} Contact Message from #{@contact.email}",
+      :to => ApiUmbrellaConfig[:web][:contact_form_email]
   end
 end

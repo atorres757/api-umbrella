@@ -1,9 +1,7 @@
-local array_includes = require "api-umbrella.utils.array_includes"
-local deep_merge_overwrite_arrays = require "api-umbrella.utils.deep_merge_overwrite_arrays"
 local dir = require "pl.dir"
 local file = require "pl.file"
+local invert_table = require "api-umbrella.utils.invert_table"
 local lustache = require "lustache"
-local lyaml = require "lyaml"
 local mustache_unescape = require "api-umbrella.utils.mustache_unescape"
 local path = require "pl.path"
 local plutils = require "pl.utils"
@@ -13,32 +11,10 @@ local stat = require "posix.sys.stat"
 local tablex = require "pl.tablex"
 local unistd = require "posix.unistd"
 
+local chmod = stat.chmod
+local chown = unistd.chown
+
 local config
-local template_config
-
-local function set_template_config()
-  local runtime_config_path = path.join(config["run_dir"], "runtime_config.yml")
-
-  template_config = tablex.deepcopy(config)
-  deep_merge_overwrite_arrays(template_config, {
-    _api_umbrella_config_runtime_file = runtime_config_path,
-    ["_test_env?"] = (config["app_env"] == "test"),
-    ["_development_env?"] = (config["app_env"] == "development"),
-    _mongodb_yaml = lyaml.dump({deep_merge_overwrite_arrays({
-      storage = {
-        dbPath = path.join(config["db_dir"], "mongodb"),
-      },
-    }, config["mongodb"]["embedded_server_config"])}),
-    _elasticsearch_yaml = lyaml.dump({deep_merge_overwrite_arrays({
-      path = {
-        conf = path.join(config["etc_dir"], "elasticsearch"),
-        scripts = path.join(config["etc_dir"], "elasticsearch_scripts"),
-        data = path.join(config["db_dir"], "elasticsearch"),
-        logs = config["log_dir"],
-      },
-    }, config["elasticsearch"]["embedded_server_config"])})
-  })
-end
 
 local function permission_check()
   local effective_uid = unistd.geteuid()
@@ -48,7 +24,7 @@ local function permission_check()
       os.exit(1)
     end
 
-    local status, output, err = run_command("getent passwd " .. config["user"])
+    local status, output, err = run_command({ "getent", "passwd", config["user"] })
     if status == 2 and output == "" then
       print("User '" .. (config["user"] or "") .. "' does not exist")
       os.exit(1)
@@ -64,7 +40,7 @@ local function permission_check()
       os.exit(1)
     end
 
-    local status, output, err = run_command("getent group " .. config["group"])
+    local status, output, err = run_command({ "getent", "group", config["group"] })
     if status == 2 and output == "" then
       print("Group '" .. (config["group"] or "") .. "' does not exist")
       os.exit(1)
@@ -81,7 +57,7 @@ local function permission_check()
     end
   end
 
-  if effective_uid == 0 then
+  if effective_uid == 0 and config["app_env"] ~= "test" then
     if not config["user"] or not config["group"] then
       print("Must define a user and group to run worker processes as when starting with with super-user privileges")
       os.exit(1)
@@ -95,13 +71,6 @@ local function prepare()
     config["log_dir"],
     config["run_dir"],
     config["tmp_dir"],
-    path.join(config["db_dir"], "elasticsearch"),
-    path.join(config["db_dir"], "mongodb"),
-    path.join(config["db_dir"], "rsyslog"),
-    path.join(config["etc_dir"], "trafficserver/snapshots"),
-    path.join(config["log_dir"], "trafficserver"),
-    path.join(config["root_dir"], "var/trafficserver"),
-    path.join(config["_src_root_dir"], "src/api-umbrella/web-app/tmp"),
   }
 
   for _, directory in ipairs(dirs) do
@@ -127,7 +96,7 @@ local function generate_self_signed_cert()
 
     if not path.exists(ssl_key_path) or not path.exists(ssl_crt_path) then
       dir.makepath(ssl_dir)
-      local _, _, err = run_command("openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 -subj '/C=/ST=/L=/O=API Umbrella/CN=apiumbrella.example.com' -keyout " .. ssl_key_path .. " -out " ..  ssl_crt_path)
+      local _, _, err = run_command({ "openssl", "req", "-new", "-newkey", "rsa:2048", "-days", "3650", "-nodes", "-x509", "-subj", "/O=API Umbrella/CN=apiumbrella.example.com", "-keyout", ssl_key_path, "-out", ssl_crt_path })
       if err then
         print(err)
         os.exit(1)
@@ -145,6 +114,10 @@ local function ensure_geoip_db()
     local default_city_db_path = path.join(config["_embedded_root_dir"], "var/db/geoip/city-v6.dat")
     dir.makepath(path.dirname(city_db_path))
     file.copy(default_city_db_path, city_db_path)
+    chmod(city_db_path, tonumber("0640", 8))
+    if config["group"] then
+      chown(city_db_path, nil, config["group"])
+    end
   end
 end
 
@@ -154,10 +127,23 @@ local function write_templates()
     for _, filename in ipairs(files) do
       local template_path = path.join(root, filename)
 
+      local process = true
       local is_hidden = (string.find(filename, ".", 1, true) == 1)
-      local is_test_file = (string.find(template_path, "test-env") ~= nil)
+      if is_hidden then
+        process = false
+      end
 
-      if not is_hidden and (not is_test_file or config["app_env"] == "test") then
+      local is_dev_file = (string.find(template_path, "dev-env") ~= nil)
+      if is_dev_file and config["app_env"] ~= "development" then
+        process = false
+      end
+
+      local is_test_file = (string.find(template_path, "test-env") ~= nil)
+      if is_test_file and config["app_env"] ~= "test" then
+        process = false
+      end
+
+      if process then
         local install_path = string.gsub(template_path, "^" .. plutils.escape(template_root .. "/"), "", 1)
         install_path = string.gsub(install_path, plutils.escape(".mustache") .. "$", "", 1)
         install_path = path.join(config["etc_dir"], install_path)
@@ -166,12 +152,21 @@ local function write_templates()
 
         local _, extension = path.splitext(template_path)
         if extension == ".mustache" then
-          content = lustache:render(mustache_unescape(content), template_config)
+          content = lustache:render(mustache_unescape(content), config)
         end
 
         dir.makepath(path.dirname(install_path))
         file.write(install_path, content)
-        stat.chmod(install_path, stat.stat(template_path).st_mode)
+        if config["group"] then
+          chown(install_path, nil, config["group"])
+        end
+
+        local install_filename = path.basename(install_path)
+        if install_filename == "rc.log" or install_filename == "rc.main" or install_filename == "rc.perp" then
+          chmod(install_path, tonumber("0750", 8))
+        else
+          chmod(install_path, tonumber("0640", 8))
+        end
       end
     end
   end
@@ -197,31 +192,75 @@ local function write_static_site_key()
 end
 
 local function set_permissions()
-  local _, err
-  _, _, err = run_command("chmod 1777 " .. config["tmp_dir"])
-  if err then
-    print("chmod failed: ", err)
-    os.exit(1)
-  end
-
-  _, _, err = run_command("chmod 1777 " .. path.join(config["_src_root_dir"], "src/api-umbrella/web-app/tmp"))
-  if err then
-    print("chmod failed: ", err)
-    os.exit(1)
-  end
+  chmod(config["tmp_dir"], tonumber("1777", 8))
 
   if config["user"] and config["group"] then
-    _, _, err = run_command("chown -R " .. config["user"] .. ":" .. config["group"] .. " " .. path.join(config["etc_dir"], "trafficserver") .. " " .. path.join(config["root_dir"], "var"))
-    if err then
-      print(err)
-      os.exit(1)
+    local user = config["user"]
+    local group = config["group"]
+    chown(config["db_dir"], nil, group)
+    chown(config["log_dir"], nil, group)
+    chown(config["run_dir"], user, group)
+    chown(config["tmp_dir"], user, group)
+    chown(config["var_dir"], nil, group)
+    chown(config["etc_dir"], nil, group)
+    chown(path.join(config["db_dir"], "geoip"), nil, group)
+    chown(path.join(config["etc_dir"], "elasticsearch"), nil, group)
+    chown(path.join(config["etc_dir"], "nginx"), nil, group)
+    chown(path.join(config["etc_dir"], "perp"), nil, group)
+    chown(path.join(config["etc_dir"], "trafficserver"), nil, group)
+
+    if config["app_env"] == "test" then
+      chown(path.join(config["etc_dir"], "test-env"), nil, group)
+      chown(path.join(config["etc_dir"], "test-env/mongo-orchestration"), nil, group)
+      chown(path.join(config["etc_dir"], "test-env/nginx"), nil, group)
+      chown(path.join(config["etc_dir"], "test-env/openldap"), nil, group)
+      chown(path.join(config["etc_dir"], "test-env/unbound"), nil, group)
+    end
+  end
+
+  local service_dirs = dir.getdirectories(path.join(config["etc_dir"], "perp"))
+  for _, service_dir in ipairs(service_dirs) do
+    chmod(service_dir, tonumber("0750", 8))
+    if config["group"] then
+      chown(service_dir, nil, config["group"])
     end
   end
 end
 
 local function activate_services()
-  local active_services = dir.getdirectories(path.join(config["_src_root_dir"], "templates/etc/perp"))
-  tablex.transform(path.basename, active_services)
+  local available_services = dir.getdirectories(path.join(config["_src_root_dir"], "templates/etc/perp"))
+  tablex.transform(path.basename, available_services)
+  available_services = invert_table(available_services)
+
+  local active_services = {}
+  if config["_service_general_db_enabled?"] then
+    active_services["mongod"] = 1
+  end
+  if config["_service_log_db_enabled?"] then
+    active_services["elasticsearch"] = 1
+  end
+  if config["_service_router_enabled?"] then
+    active_services["geoip-auto-updater"] = 1
+    active_services["mora"] = 1
+    active_services["nginx"] = 1
+    active_services["nginx-reloader"] = 1
+    active_services["rsyslog"] = 1
+    active_services["trafficserver"] = 1
+  end
+  if config["_service_web_enabled?"] then
+    active_services["web-delayed-job"] = 1
+    active_services["web-puma"] = 1
+  end
+  if config["app_env"] == "development" then
+    active_services["dev-env-ember-server"] = 1
+  end
+  if config["app_env"] == "test" then
+    active_services["test-env-mailhog"] = 1
+    active_services["test-env-mongo-orchestration"] = 1
+    active_services["test-env-nginx"] = 1
+    active_services["test-env-openldap"] = 1
+    active_services["test-env-unbound"] = 1
+  end
 
   -- Loop over the perp controlled services and set the sticky permission bit
   -- for any services that are supposed to be active (this sticky bit is how
@@ -232,55 +271,9 @@ local function activate_services()
 
     -- Disable any old services that might be installed, but are no longer
     -- present in templates/etc/perp.
-    local is_active = array_includes(active_services, service_name)
-
-    -- Disable services according to the broader service groups marked as
-    -- enabled in api-umbrella.yml's "services" list.
-    if is_active then
-      if not config["_service_general_db_enabled?"] then
-        if array_includes({ "mongod" }, service_name) then
-          is_active = false
-        end
-      end
-
-      if not config["_service_log_db_enabled?"] then
-        if array_includes({ "elasticsearch" }, service_name) then
-          is_active = false
-        end
-      end
-
-      if not config["_service_hadoop_db_enabled?"] then
-        if array_includes({ "flume", "kylin", "presto" }, service_name) then
-          is_active = false
-        end
-      end
-
-      if not config["_service_router_enabled?"] then
-        if array_includes({ "geoip-auto-updater", "mora", "nginx", "rsyslog", "trafficserver" }, service_name) then
-          is_active = false
-        end
-      end
-
-      if not config["_service_web_enabled?"] then
-        if array_includes({ "web-delayed-job", "web-puma" }, service_name) then
-          is_active = false
-        end
-      end
-
-      if not config["_service_nginx_reloader_enabled?"] then
-        if array_includes({ "nginx-reloader" }, service_name) then
-          is_active = false
-        end
-      end
-    end
-
-    -- Disable any test-only services when not running in the test environment.
-    if string.find(service_name, "test-env", 1, true) == 1 then
-      if config["app_env"] == "test" then
-        is_active = true
-      else
-        is_active = false
-      end
+    local is_active = false
+    if available_services[service_name] and active_services[service_name] then
+      is_active = true
     end
 
     -- Perp's hidden directories don't need the sticky bit.
@@ -289,26 +282,57 @@ local function activate_services()
       is_active = false
     end
 
+    -- Create the log directory for svlogd output for this service.
+    if is_active or service_name == ".boot" then
+      local service_log_name = service_name
+      if service_name == ".boot" then
+        service_log_name = "perpd"
+      end
+
+      local service_log_dir = path.join(config["log_dir"], service_log_name)
+      dir.makepath(service_log_dir)
+      local _, _, log_chmod_err = run_command({ "chmod", "0755", service_log_dir })
+      if log_chmod_err then
+        print("chmod failed: ", log_chmod_err)
+        os.exit(1)
+      end
+      if config["user"] and config["group"] then
+        local _, _, log_chown_err = run_command({ "chown", config["user"] .. ":" .. config["group"], service_log_dir })
+        if log_chown_err then
+          print("chown failed: ", log_chown_err)
+          os.exit(1)
+        end
+      end
+
+      -- Disable the svlogd script if we want all output to go to
+      -- stdout/stderr.
+      if config["log"]["destination"] == "console" then
+        local _, _, err = run_command({ "chmod", "-x", service_dir .. "/rc.log" })
+        if err then
+          print("chmod failed: ", err)
+          os.exit(1)
+        end
+      end
+    end
+
     -- Set the sticky bit for any active services.
     if is_active then
-      local _, _, err = run_command("chmod +t " .. service_dir)
-      if err then
-        print(err)
-        os.exit(1)
+      chmod(service_dir, tonumber("1750", 8))
+
+      local log_dir = path.join(config["log_dir"], service_name)
+      dir.makepath(log_dir)
+      chmod(log_dir, tonumber("0750", 8))
+      if config["user"] and config["group"] then
+        chown(log_dir, config["user"], config["group"])
       end
     else
-      local _, _, err = run_command("chmod -t " .. service_dir)
-      if err then
-        print(err)
-        os.exit(1)
-      end
+      chmod(service_dir, tonumber("0750", 8))
     end
   end
 end
 
 return function()
   config = read_config({ write = true })
-  set_template_config()
   permission_check()
   prepare()
   generate_self_signed_cert()

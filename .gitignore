@@ -30,14 +30,16 @@
 /install_manifest_hadoop-analytics.txt
 
 /build/work
+/build/package/work
 /build/package/verify/.rnd
 /deploy/.env
+/deploy/log
+/deploy/tmp
 /log/*
-/test/node_modules
-/test/config/.overrides.yml
-/test/log/*
-/test/tmp/*
+/test/reports
+/test/tmp
 /ci_cache
 /vendor
 /website/build
+/website/.sass-cache
 /docs/_build

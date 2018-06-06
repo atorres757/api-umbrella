@@ -1,0 +1,23 @@
+version: "2.1"
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile-dev-build
+    volumes:
+      - .:/app
+      - build_cache:/build
+    tmpfs:
+      # Mount the ember-cli tmp directory as a tmpfs partition for better
+      # performance.
+      - /app/src/api-umbrella/admin-ui/tmp:rw,size=128m,mode=1777
+    environment:
+      HTTP_PORT: 8100
+      HTTPS_PORT: 8101
+    ports:
+      - "8100:8100"
+      - "8101:8101"
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+volumes:
+  build_cache:

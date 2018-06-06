@@ -4,10 +4,13 @@ class LogSearch::Base
 
   CASE_SENSITIVE_FIELDS = [
     "api_key",
+    "request_ip_city",
+  ].freeze
+
+  UPPERCASE_FIELDS = [
     "request_ip_country",
     "request_ip_region",
-    "request_ip_city",
-  ]
+  ].freeze
 
   def self.policy_class
     # Set the Pundit policy class to be the same for all LogSearch::Base child
@@ -30,6 +33,8 @@ class LogSearch::Base
     if(@end_time > Time.zone.now)
       @end_time = Time.zone.now
     end
+
+    @options[:query_timeout] ||= 90
 
     @interval = options[:interval]
     @region = options[:region]
@@ -56,5 +61,9 @@ class LogSearch::Base
 
   def aggregate_by_country!
     aggregate_by_region_field!(:request_ip_country)
+  end
+
+  def none!
+    @none = true
   end
 end

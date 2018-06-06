@@ -1,7 +1,19 @@
 class ApplicationController < ActionController::Base
   include Pundit
   include DatatablesHelper
-  protect_from_forgery
+  prepend_around_filter :use_locale
+  protect_from_forgery :with => :exception
+
+  before_action :set_cache_control
+  around_action :set_userstamp
+
+  def after_sign_in_path_for(resource)
+    if(resource.is_a?(Admin))
+      "/admin/#/login"
+    else
+      super
+    end
+  end
 
   def pundit_user
     current_admin
@@ -40,9 +52,9 @@ class ApplicationController < ActionController::Base
     if(time)
       case(time)
       when String
-        time = Time.parse(time)
+        time = Time.parse(time).utc
       when Numeric
-        time = Time.at(time / 1000.0)
+        time = Time.at(time / 1000.0).utc
       end
 
       time.utc.strftime("%Y-%m-%d %H:%M:%S")
@@ -71,12 +83,15 @@ class ApplicationController < ActionController::Base
     end
   end
 
-  def set_analytics_adapter
-    if(params[:beta_analytics] == "true")
-      @analytics_adapter = "kylin"
-    else
-      @analytics_adapter = ApiUmbrellaConfig[:analytics][:adapter]
+  def use_locale
+    locale = http_accept_language.language_region_compatible_from(I18n.available_locales) || I18n.default_locale
+    I18n.with_locale(locale) do
+      yield
     end
+  end
+
+  def set_analytics_adapter
+    @analytics_adapter = ApiUmbrellaConfig[:analytics][:adapter]
   end
 
   def set_time_zone
@@ -85,5 +100,67 @@ class ApplicationController < ActionController::Base
     yield
   ensure
     Time.zone = old_time_zone
+  end
+
+  def signed_in_root_path(resource_or_scope)
+    admin_path
+  end
+
+  def after_sign_out_path_for(resource_or_scope)
+    admin_path
+  end
+
+  private
+
+  def authenticate_admin_from_token!
+    admin_token = request.headers['X-Admin-Auth-Token'].presence
+    admin = admin_token && Admin.where(:authentication_token => admin_token.to_s).first
+
+    if admin
+      # Don't store the user on the session, so the token is required on every
+      # request.
+      sign_in(admin, :store => false)
+
+      # The normal userstamp before_action that set's the current admin fires
+      # before we handle token authentication. To fix that, force the userstamp
+      # model to pickup the current admin account after this token-based login.
+      unless RequestStore.store[:current_userstamp_user]
+        begin
+          RequestStore.store[:current_userstamp_user] = current_admin
+        rescue => e
+          Rails.logger.warn("Unexpected error setting userstamp: #{e}")
+        end
+      end
+    end
+  end
+
+  # This can be used to replace the default Rails "verify_authenticity_token"
+  # CSRF protection in cases where the endpoint may be hit via ajax by an admin
+  # (with the X-Admin-Auth-Token header provided), or via a normal Rails
+  # server-side submit (in which case the default CSRF token will be present).
+  #
+  # If the "X-Admin-Auth-Token" header is being passed in, then we can consider
+  # that an effective replacement of the CSRF token value (since only a local
+  # application should have knowledge of this token). But if this auth token
+  # isn't passed in, then we fallback to the default rails CSRF logic in
+  # verify_authenticity_token.
+  def verify_authenticity_token_with_admin_token
+    admin_token = request.headers['X-Admin-Auth-Token'].presence
+    if(!current_admin || !admin_token || admin_token != current_admin.authentication_token)
+      verify_authenticity_token
+    end
+  end
+
+  def set_cache_control
+    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate, no-store"
+    response.headers["Pragma"] = "no-cache"
+  end
+
+  def set_userstamp
+    orig = RequestStore.store[:current_userstamp_user]
+    RequestStore.store[:current_userstamp_user] = current_admin
+    yield
+  ensure
+    RequestStore.store[:current_userstamp_user] = orig
   end
 end

@@ -1,5 +1,5 @@
-# Fix json issues with serializing times:
-# https://github.com/ohler55/oj/issues/192
-Oj.default_options = {
-  :use_to_json => true
-}
+# Don't include milliseconds on timestamps to maintain our older response
+# formats.
+ActiveSupport::JSON::Encoding.time_precision = 0
+
+Oj.optimize_rails

@@ -1,3 +1,5 @@
+[![CircleCI](https://circleci.com/gh/NREL/api-umbrella.svg?style=svg)](https://circleci.com/gh/NREL/api-umbrella) [![Dependency Status](https://gemnasium.com/badges/github.com/NREL/api-umbrella.svg)](https://gemnasium.com/github.com/NREL/api-umbrella)
+
 # API Umbrella
 
 ## What Is API Umbrella?

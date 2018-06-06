@@ -1,18 +1,26 @@
 local array_includes = require "api-umbrella.utils.array_includes"
 local array_last = require "api-umbrella.utils.array_last"
+local deep_defaults = require "api-umbrella.utils.deep_defaults"
 local deep_merge_overwrite_arrays = require "api-umbrella.utils.deep_merge_overwrite_arrays"
 local dir = require "pl.dir"
 local file = require "pl.file"
+local getgrgid = require("posix.grp").getgrgid
+local getpwuid = require("posix.pwd").getpwuid
 local host_normalize = require "api-umbrella.utils.host_normalize"
+local invert_table = require "api-umbrella.utils.invert_table"
 local lyaml = require "lyaml"
 local nillify_yaml_nulls = require "api-umbrella.utils.nillify_yaml_nulls"
 local path = require "pl.path"
 local plutils = require "pl.utils"
 local random_token = require "api-umbrella.utils.random_token"
+local stat = require "posix.sys.stat"
 local stringx = require "pl.stringx"
 local types = require "pl.types"
+local unistd = require "posix.unistd"
 local url = require "socket.url"
 
+local chmod = stat.chmod
+local chown = unistd.chown
 local is_empty = types.is_empty
 local split = plutils.split
 local strip = stringx.strip
@@ -114,42 +122,6 @@ local function read_default_config()
   nillify_yaml_nulls(config)
 end
 
--- Handle setup of random secret tokens that should be be unique for API
--- Umbrella installations, but should be persisted across restarts.
---
--- In a multi-server setup, these secret tokens will likely need to be
--- explicitly given in the server's /etc/api-umbrella/api-umbrella.yml file so
--- the secrets match across servers, but this provides defaults for a
--- single-server installation.
-local function set_cached_random_tokens()
-  -- Generate random tokens for this server.
-  local cached = {
-    web = {
-      rails_secret_token = random_token(128),
-      devise_secret_key = random_token(128),
-    },
-    static_site = {
-      api_key = random_token(40),
-    },
-  }
-
-  -- See if there were any previous values for these random tokens on this
-  -- server. If so, use any of those values that might be present instead.
-  local file_path = path.join(os.getenv("API_UMBRELLA_ROOT") or "/opt/api-umbrella", "var/run/cached_random_config_values.yml")
-  local content = file.read(file_path, true)
-  if content then
-    deep_merge_overwrite_arrays(cached, lyaml.load(content))
-  end
-
-  -- Persist whatever the state of the tokens is now.
-  file.write(file_path, lyaml.dump({cached}))
-
-  -- Merge these random tokens onto the config. Note that this happens before
-  -- we read the system config (/etc/api-umbrella/api-umbrella.yml), so if
-  -- these values are defined there, these random values will be overwritten.
-  deep_merge_overwrite_arrays(config, cached)
-end
-
 -- Read the /etc/api-umbrella/api-umbrella.yml config file that provides
 -- server-specific overrides for API Umbrella configuration.
 local function read_system_config()
@@ -188,20 +160,24 @@ local function set_computed_config()
     config["etc_dir"] = path.join(config["root_dir"], "etc")
   end
 
+  if not config["var_dir"] then
+    config["var_dir"] = path.join(config["root_dir"], "var")
+  end
+
   if not config["log_dir"] then
-    config["log_dir"] = path.join(config["root_dir"], "var/log")
+    config["log_dir"] = path.join(config["var_dir"], "log")
   end
 
   if not config["run_dir"] then
-    config["run_dir"] = path.join(config["root_dir"], "var/run")
+    config["run_dir"] = path.join(config["var_dir"], "run")
   end
 
   if not config["tmp_dir"] then
-    config["tmp_dir"] = path.join(config["root_dir"], "var/tmp")
+    config["tmp_dir"] = path.join(config["var_dir"], "tmp")
   end
 
   if not config["db_dir"] then
-    config["db_dir"] = path.join(config["root_dir"], "var/db")
+    config["db_dir"] = path.join(config["var_dir"], "db")
   end
 
   local trusted_proxies = config["router"]["trusted_proxies"] or {}
@@ -250,6 +226,27 @@ local function set_computed_config()
     config["_default_hostname_normalized"] = host_normalize(default_hostname)
   end
 
+  if not config["web"] then
+    config["web"] = {}
+  end
+
+  -- Set the default host used for web application links (for mailers, contact
+  -- URLs, etc).
+  --
+  -- By default, pick this up from the `hosts` array where `default` has been
+  -- set to true (this gets put on `_default_hostname` for easier access). But
+  -- still allow the web host to be explicitly set via `web.default_host`.
+  if not config["web"]["default_host"] then
+    config["web"]["default_host"] = config["_default_hostname"]
+
+    -- Fallback to something that will at least generate valid URLs if there's
+    -- no default, or the default is "*" (since in this context, a wildcard
+    -- doesn't make sense for generating URLs).
+    if not config["web"]["default_host"] or config["web"]["default_host"] == "*" then
+      config["web"]["default_host"] = "localhost"
+    end
+  end
+
   -- Determine the nameservers for DNS resolution. Prefer explicitly configured
   -- nameservers, but fallback to nameservers defined in resolv.conf, and then
   -- Google's DNS servers if nothing else is defined.
@@ -280,6 +277,7 @@ local function set_computed_config()
     table.insert(config["dns_resolver"]["_nameservers"], nameserver)
   end
   config["dns_resolver"]["_nameservers_nginx"] = table.concat(config["dns_resolver"]["_nameservers_nginx"], " ")
+  config["dns_resolver"]["_nameservers_trafficserver"] = config["dns_resolver"]["_nameservers_nginx"]
   config["dns_resolver"]["nameservers"] = nil
 
   config["dns_resolver"]["_etc_hosts"] = read_etc_hosts()
@@ -309,12 +307,6 @@ local function set_computed_config()
     config["analytics"]["outputs"] = { config["analytics"]["adapter"] }
   end
 
-  config["kafka"]["_rsyslog_broker"] = {}
-  for _, broker in ipairs(config["kafka"]["brokers"]) do
-    table.insert(config["kafka"]["_rsyslog_broker"], '"' .. broker["host"] .. ":" .. broker["port"] .. '"')
-  end
-  config["kafka"]["_rsyslog_broker"] = table.concat(config["kafka"]["_rsyslog_broker"], ",")
-
   -- Setup the request/response timeouts for the different pieces of the stack.
   -- Since we traverse multiple proxies, we want to make sure the timeouts of
   -- the different proxies are kept in sync.
@@ -333,31 +325,68 @@ local function set_computed_config()
   -- router is what should trigger the initial timeout. This also prevents the
   -- proxies further back in the stack from thinking the client unexpectedly
   -- hung up on the request.
-  config["trafficserver"]["_connect_attempts_timeout"] = config["nginx"]["proxy_connect_timeout"] + 1
+  config["trafficserver"]["_connect_attempts_timeout"] = config["nginx"]["proxy_read_timeout"] + 1
   config["trafficserver"]["_transaction_no_activity_timeout_out"] = config["nginx"]["proxy_read_timeout"] + 1
-  config["trafficserver"]["_transaction_no_activity_timeout_in"] = config["nginx"]["proxy_send_timeout"] + 1
+  config["trafficserver"]["_transaction_no_activity_timeout_in"] = config["nginx"]["proxy_read_timeout"] + 1
   config["nginx"]["_initial_proxy_connect_timeout"] = config["nginx"]["proxy_connect_timeout"] + 2
   config["nginx"]["_initial_proxy_read_timeout"] = config["nginx"]["proxy_read_timeout"] + 2
   config["nginx"]["_initial_proxy_send_timeout"] = config["nginx"]["proxy_send_timeout"] + 2
 
+  if not config["user"] then
+    local euid = unistd.geteuid()
+    if euid then
+      local user = getpwuid(euid)
+      if user then
+        config["_effective_user_id"] = user.pw_uid
+        config["_effective_user_name"] = user.pw_name
+      end
+    end
+  end
+
+  if not config["group"] then
+    local egid = unistd.getegid()
+    if egid then
+      local group = getgrgid(egid)
+      if group then
+        config["_effective_group_id"] = group.gr_gid
+        config["_effective_group_name"] = group.gr_name
+      end
+    end
+  end
+
   deep_merge_overwrite_arrays(config, {
     _embedded_root_dir = embedded_root_dir,
     _src_root_dir = src_root_dir,
+    _api_umbrella_config_runtime_file = path.join(config["run_dir"], "runtime_config.yml"),
     _package_path = package.path,
     _package_cpath = package.cpath,
+    ["_test_env?"] = (config["app_env"] == "test"),
+    ["_development_env?"] = (config["app_env"] == "development"),
     analytics = {
       ["_output_elasticsearch?"] = array_includes(config["analytics"]["outputs"], "elasticsearch"),
-      ["_output_kylin?"] = array_includes(config["analytics"]["outputs"], "kylin"),
     },
     mongodb = {
       _database = plutils.split(array_last(plutils.split(config["mongodb"]["url"], "/", true)), "?", true)[1],
+      embedded_server_config = {
+        storage = {
+          dbPath = path.join(config["db_dir"], "mongodb"),
+        },
+      },
     },
     elasticsearch = {
       _first_server = config["elasticsearch"]["_servers"][1],
+      embedded_server_config = {
+        path = {
+          data = path.join(config["db_dir"], "elasticsearch"),
+          logs = path.join(config["log_dir"], "elasticsearch"),
+        },
+      },
+      ["_template_version_v1?"] = (config["elasticsearch"]["template_version"] == 1),
+      ["_template_version_v2?"] = (config["elasticsearch"]["template_version"] == 2),
+      ["_api_version_lte_2?"] = (config["elasticsearch"]["api_version"] <= 2),
     },
     ["_service_general_db_enabled?"] = array_includes(config["services"], "general_db"),
     ["_service_log_db_enabled?"] = array_includes(config["services"], "log_db"),
-    ["_service_hadoop_db_enabled?"] = array_includes(config["services"], "hadoop_db"),
     ["_service_router_enabled?"] = array_includes(config["services"], "router"),
     ["_service_web_enabled?"] = array_includes(config["services"], "web"),
     ["_service_nginx_reloader_enabled?"] = (array_includes(config["services"], "router") and config["nginx"]["_reloader_frequency"]),
@@ -368,6 +397,12 @@ local function set_computed_config()
       dir = src_root_dir,
     },
     web = {
+      admin = {
+        auth_strategies = {
+          ["_enabled"] = invert_table(config["web"]["admin"]["auth_strategies"]["enabled"]),
+          ["_only_ldap_enabled?"] = (#config["web"]["admin"]["auth_strategies"]["enabled"] == 1 and config["web"]["admin"]["auth_strategies"]["enabled"][1] == "ldap"),
+        },
+      },
       dir = path.join(src_root_dir, "src/api-umbrella/web-app"),
       puma = {
         bind = "unix://" .. config["run_dir"] .. "/puma.sock",
@@ -379,8 +414,89 @@ local function set_computed_config()
     },
   })
 
+  if config["elasticsearch"]["api_version"] <= 2 then
+    deep_merge_overwrite_arrays(config, {
+      elasticsearch = {
+        embedded_server_config = {
+          path = {
+            conf = path.join(config["etc_dir"], "elasticsearch"),
+            scripts = path.join(config["etc_dir"], "elasticsearch_scripts"),
+          },
+        },
+      },
+    })
+  end
+
+  deep_merge_overwrite_arrays(config, {
+    _mongodb_yaml = lyaml.dump({ config["mongodb"]["embedded_server_config"] }),
+    _elasticsearch_yaml = lyaml.dump({ config["elasticsearch"]["embedded_server_config"] }),
+  })
+
+  if config["app_env"] == "development" then
+    config["_dev_env_install_dir"] = path.join(src_root_dir, "build/work/dev-env")
+  end
+
   if config["app_env"] == "test" then
     config["_test_env_install_dir"] = path.join(src_root_dir, "build/work/test-env")
+  end
+end
+
+local function set_process_permissions()
+  if config["group"] then
+    unistd.setpid("g", config["group"])
+  end
+  stat.umask(tonumber(config["umask"], 8))
+end
+
+-- Handle setup of random secret tokens that should be be unique for API
+-- Umbrella installations, but should be persisted across restarts.
+--
+-- In a multi-server setup, these secret tokens will likely need to be
+-- explicitly given in the server's /etc/api-umbrella/api-umbrella.yml file so
+-- the secrets match across servers, but this provides defaults for a
+-- single-server installation.
+local function set_cached_random_tokens()
+  -- Only generate new new tokens if they haven't been explicitly set in the
+  -- config files.
+  if not config["web"]["rails_secret_token"] or not config["static_site"]["api_key"] then
+    -- See if there were any previous values for these random tokens on this
+    -- server. If so, use any of those values that might be present instead.
+    local cached_path = path.join(config["run_dir"], "cached_random_config_values.yml")
+    local content = file.read(cached_path, true)
+    local cached = {}
+    if content then
+      cached = lyaml.load(content)
+      deep_defaults(config, cached)
+    end
+
+    -- If the tokens haven't already been written to the cache, generate them.
+    if not config["web"]["rails_secret_token"] or not config["static_site"]["api_key"] then
+      if not config["web"]["rails_secret_token"] then
+        deep_defaults(cached, {
+          web = {
+            rails_secret_token = random_token(64),
+          },
+        })
+      end
+
+      if not config["static_site"]["api_key"] then
+        deep_defaults(cached, {
+          static_site = {
+            api_key = random_token(40),
+          },
+        })
+      end
+
+      -- Persist the cached tokens.
+      dir.makepath(config["run_dir"])
+      file.write(cached_path, lyaml.dump({ cached }))
+      chmod(cached_path, tonumber("0640", 8))
+      if config["group"] then
+        chown(cached_path, nil, config["group"])
+      end
+
+      deep_defaults(config, cached)
+    end
   end
 end
 
@@ -391,8 +507,12 @@ end
 -- having to actually merge and combine again).
 local function write_runtime_config()
   local runtime_config_path = path.join(config["run_dir"], "runtime_config.yml")
-  dir.makepath(path.dirname(runtime_config_path))
+  dir.makepath(config["run_dir"])
   file.write(runtime_config_path, lyaml.dump({config}))
+  chmod(runtime_config_path, tonumber("0640", 8))
+  if config["group"] then
+    chown(runtime_config_path, nil, config["group"])
+  end
 end
 
 return function(options)
@@ -407,14 +527,18 @@ return function(options)
   -- writing the runtime config.
   if not config or (options and options["write"]) then
     read_default_config()
-    set_cached_random_tokens()
     read_system_config()
     set_computed_config()
+    set_process_permissions()
+
+    set_cached_random_tokens()
 
     if options and options["write"] then
       write_runtime_config()
     end
   end
+
+  set_process_permissions()
 
   return config
 end

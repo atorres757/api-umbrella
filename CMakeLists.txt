@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.6.0 FATAL_ERROR)
 project(api-umbrella)
 
-option(ENABLE_HADOOP_ANALYTICS "Build dependencies for Hadoop analytics" off)
-option(ENABLE_TEST_DEPENDENCIES "Build dependencies for running tests" off)
-
 # Installation prefix
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX /opt/api-umbrella CACHE PATH "default install path" FORCE)
@@ -14,6 +11,7 @@ set(INSTALL_PREFIX_EMBEDDED ${CMAKE_INSTALL_PREFIX}/embedded)
 set(EP_BASE build/work/external-projects)
 set_directory_properties(PROPERTIES EP_BASE ${EP_BASE})
 set(WORK_DIR ${CMAKE_BINARY_DIR}/build/work)
+set(PACKAGE_WORK_DIR ${CMAKE_BINARY_DIR}/build/package/work)
 
 # Directory to store "stamp" files indicating when a step was completed or last
 # touched.
@@ -24,14 +22,10 @@ execute_process(COMMAND mkdir -p ${STAMP_DIR})
 set(STAGE_DIR ${WORK_DIR}/stage)
 set(STAGE_PREFIX_DIR ${STAGE_DIR}${CMAKE_INSTALL_PREFIX})
 set(STAGE_EMBEDDED_DIR ${STAGE_DIR}${INSTALL_PREFIX_EMBEDDED})
-set(HADOOP_ANALYTICS_STAGE_DIR ${WORK_DIR}/stage-hadoop-analytics)
-set(HADOOP_ANALYTICS_STAGE_PREFIX_DIR ${HADOOP_ANALYTICS_STAGE_DIR}${CMAKE_INSTALL_PREFIX})
-set(HADOOP_ANALYTICS_STAGE_EMBEDDED_DIR ${HADOOP_ANALYTICS_STAGE_DIR}${INSTALL_PREFIX_EMBEDDED})
 
-# Where to install app-level vendor dependencies.
-set(VENDOR_DIR ${WORK_DIR}/vendor)
-set(VENDOR_LUA_DIR ${VENDOR_DIR}/share/lua/5.1)
-set(LUAROCKS_CMD env LUA_PATH=${STAGE_EMBEDDED_DIR}/openresty/luajit/share/lua/5.1/?.lua$<SEMICOLON>${STAGE_EMBEDDED_DIR}/openresty/luajit/share/lua/5.1/?/init.lua$<SEMICOLON>$<SEMICOLON> ${STAGE_EMBEDDED_DIR}/bin/luarocks)
+# Where to install development-only dependencies.
+set(DEV_INSTALL_PREFIX ${WORK_DIR}/dev-env)
+set(DEV_VENDOR_DIR ${DEV_INSTALL_PREFIX}/vendor)
 
 # Where to install test-only dependencies.
 set(TEST_INSTALL_PREFIX ${WORK_DIR}/test-env)
@@ -39,80 +33,60 @@ set(TEST_VENDOR_DIR ${TEST_INSTALL_PREFIX}/vendor)
 set(TEST_VENDOR_LUA_SHARE_DIR ${TEST_VENDOR_DIR}/share/lua/5.1)
 set(TEST_VENDOR_LUA_LIB_DIR ${TEST_VENDOR_DIR}/lib/lua/5.1)
 
-# Define a timestamped release name for our app installations.
-execute_process(COMMAND date -u +%Y%m%d%H%M%S OUTPUT_VARIABLE RELEASE_TIMESTAMP OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND date -u +%Y%m%d OUTPUT_VARIABLE RELEASE_DATE OUTPUT_STRIP_TRAILING_WHITESPACE)
+# PATH variables to use when executing other commands. Note that we use a
+# hard-coded base default path (instead of $ENV{PATH}), since using $ENV{PATH}
+# makes cmake think there have been PATH changes which trigger rebuilds, even
+# when the path hasn't changed.
+set(DEFAULT_PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
+set(STAGE_EMBEDDED_PATH ${STAGE_EMBEDDED_DIR}/bin:${DEFAULT_PATH})
+set(DEV_PATH ${DEV_INSTALL_PREFIX}/bin:${STAGE_EMBEDDED_PATH})
 
+# Where to install app-level vendor dependencies.
+set(VENDOR_DIR ${WORK_DIR}/vendor)
+set(VENDOR_LUA_DIR ${VENDOR_DIR}/share/lua/5.1)
+if(ENABLE_DEPLOY_ONLY)
+  set(LUA_PREFIX ${INSTALL_PREFIX_EMBEDDED})
+else()
+  set(LUA_PREFIX ${STAGE_EMBEDDED_DIR})
+endif()
+set(LUAROCKS_CMD env LUA_PATH=${LUA_PREFIX}/openresty/luajit/share/lua/5.1/?.lua$<SEMICOLON>${LUA_PREFIX}/openresty/luajit/share/lua/5.1/?/init.lua$<SEMICOLON>$<SEMICOLON> ${LUA_PREFIX}/bin/luarocks)
+set(OPM_CMD env LUA_PATH=${LUA_PREFIX}/openresty/lualib/?.lua$<SEMICOLON>${LUA_PREFIX}/openresty/lualib/?/init.lua$<SEMICOLON>$<SEMICOLON> PATH=${STAGE_EMBEDDED_PATH} LD_LIBRARY_PATH=${STAGE_EMBEDDED_DIR}/openresty/luajit/lib:${STAGE_EMBEDDED_DIR}/lib opm)
+
+# Misc dependencies/functions.
 include(ExternalProject)
-
-function(require_program name)
-  find_program(${name} ${name})
-  if(NOT ${name})
-    MESSAGE(FATAL_ERROR "Could not find ${name}")
-  endif()
-endfunction(require_program)
-
-find_package(LibXml2 REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_search_module(LIBUUID REQUIRED uuid)
-pkg_search_module(LIBFFI REQUIRED libffi)
-require_program(rsync)
+include(${CMAKE_SOURCE_DIR}/build/cmake/functions/GetGitRevisionDescription.cmake)
+include(${CMAKE_SOURCE_DIR}/build/cmake/functions/GetGitTimestamp.cmake)
+include(${CMAKE_SOURCE_DIR}/build/cmake/functions/luarocks_install.cmake)
+include(${CMAKE_SOURCE_DIR}/build/cmake/functions/opm_install.cmake)
+include(${CMAKE_SOURCE_DIR}/build/cmake/functions/require_program.cmake)
 
-include(${CMAKE_SOURCE_DIR}/build/cmake/versions.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/elasticsearch.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/libcidr.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/libgeoip.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/mongodb.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/mora.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/openresty.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/luarocks.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/perp.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/runit_svlogd.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/ruby.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/rsyslog.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/trafficserver.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/static-site.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/core-lua-deps.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/core-web-app.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/core.cmake)
-if(ENABLE_HADOOP_ANALYTICS)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/hadoop-analytics/flume.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/hadoop-analytics/kylin.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/hadoop-analytics/presto.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/hadoop-analytics/processor.cmake)
-endif()
+# make deps
+include(${CMAKE_SOURCE_DIR}/build/cmake/deps.cmake)
 
-#
-# Testing
-#
-if(ENABLE_TEST_DEPENDENCIES)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/test/unbound.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/test/mongo-orchestration.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/test/lua-deps.cmake)
-  include(${CMAKE_SOURCE_DIR}/build/cmake/test/shellcheck.cmake)
-endif()
-include(${CMAKE_SOURCE_DIR}/build/cmake/test/lint.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/test/test-proxy.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/test/test-web-app.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/test/test.cmake)
+# make build-deps
+include(${CMAKE_SOURCE_DIR}/build/cmake/build-deps.cmake OPTIONAL)
 
-#
-# Installation
-#
-include(${CMAKE_SOURCE_DIR}/build/cmake/install.cmake)
+# make app-deps
+include(${CMAKE_SOURCE_DIR}/build/cmake/app-deps.cmake OPTIONAL)
 
-#
-# Packaging
-#
-include(${CMAKE_SOURCE_DIR}/build/cmake/package.cmake)
+# make app
+include(${CMAKE_SOURCE_DIR}/build/cmake/app.cmake OPTIONAL)
 
-#
-# Clean Task
-#
-include(${CMAKE_SOURCE_DIR}/build/cmake/clean-download-archives.cmake)
-include(${CMAKE_SOURCE_DIR}/build/cmake/distclean.cmake)
+# make test-deps
+include(${CMAKE_SOURCE_DIR}/build/cmake/test-deps.cmake OPTIONAL)
 
-#
-# Outdated Dependencies Check
-#
-include(${CMAKE_SOURCE_DIR}/build/cmake/outdated.cmake)
+# make test-bundle
+include(${CMAKE_SOURCE_DIR}/build/cmake/test-bundle.cmake OPTIONAL)
+
+# make test
+include(${CMAKE_SOURCE_DIR}/build/cmake/test.cmake OPTIONAL)
+
+# make distclean
+include(${CMAKE_SOURCE_DIR}/build/cmake/distclean.cmake OPTIONAL)
+
+# make install
+include(${CMAKE_SOURCE_DIR}/build/cmake/install.cmake OPTIONAL)
+
+# make package
+include(${CMAKE_SOURCE_DIR}/build/cmake/package.cmake OPTIONAL)
